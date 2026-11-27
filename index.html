@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <meta name="robots" content="noindex, nofollow">
 <meta name="theme-color" content="#7a1f2b">
-<title>Gift Exchange</title>
+<title>Secret Santa</title>
 <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🎁</text></svg>">
 <style>
   :root{
@@ -117,6 +117,25 @@
   @keyframes cf{to{top:105vh;transform:rotate(720deg) translateX(40px)}}
   .spin{width:44px;height:44px;border:4px solid #eadfcd;border-top-color:var(--red);border-radius:50%;margin:24px auto;animation:r .8s linear infinite}
   @keyframes r{to{transform:rotate(360deg)}}
+
+  .rows{display:flex;flex-direction:column;gap:10px}
+  .row{appearance:none;width:100%;border:2px solid var(--line);background:var(--card);color:var(--ink);border-radius:16px;
+    padding:14px 16px;display:flex;align-items:center;justify-content:space-between;gap:10px;text-align:left;cursor:pointer;transition:transform .08s}
+  .row:active{transform:scale(.98)}
+  .rname{font-size:20px;font-weight:700}
+  .rstat{font-size:14px;margin-top:3px}
+  .st.bad{color:var(--red2);font-weight:600}.st.ok{color:var(--green);font-weight:600}.st.mute{color:var(--muted)}
+  .row .tag{flex:none;font-size:15px;font-weight:700;padding:9px 14px;border-radius:99px;background:var(--red);color:#fff}
+  .row.ready .tag{background:var(--gold);color:#3a2a08}
+  .row.done{background:#f1ece3}.row.done .tag{background:#dfeae3;color:var(--green)}
+  .row.todo{border-color:#ecc9ce}
+  .sub2{margin-top:12px;font-size:15px;font-weight:600}.sub2.warn{color:var(--red2)}.sub2.good{color:var(--green)}
+  .stepnum{display:flex;align-items:center;gap:10px;font-weight:700;font-size:18px;margin:6px 0 4px}
+  .stepnum span{width:30px;height:30px;border-radius:50%;background:var(--red);color:#fff;display:flex;align-items:center;justify-content:center;font-size:15px;flex:none}
+  .sheet p.small{font-size:15px;margin:0 0 10px}
+  .spinbtn{font-size:20px;padding:18px;background:linear-gradient(135deg,#c9a24a,#a8323f);box-shadow:0 6px 16px rgba(168,50,63,.3)}
+  .note + .note{margin-top:10px}
+  .reveal .note{margin-bottom:6px}
 </style>
 </head>
 <body>
@@ -127,28 +146,24 @@
 </header>
 
 <main>
-  <div class="card count" id="countCard">
-    <div class="spin"></div>
-  </div>
+  <div class="card count" id="countCard"><div class="spin"></div></div>
 
-  <div class="card steps" id="steps">
+  <div class="card steps">
     <div class="steps-h">How it works</div>
     <ol>
-      <li><b>Find your name</b> below and tap it.</li>
-      <li><b>Make up any 4 numbers</b> (like 1225). This is your PIN.</li>
-      <li><b>Tap “Draw my name.”</b> You’ll see who you’re buying for and what they want.</li>
-      <li><b>Type your own wish list</b> so whoever got you knows what you like.</li>
-      <li><b>Keep it a secret!</b> Bring your gift to the Christmas Eve party.</li>
+      <li><b>Tap your name</b> below.</li>
+      <li><b>Type your wish list</b> so your Secret Santa knows what you like.</li>
+      <li><b>Make up any 4 numbers</b> (like 1225). That’s your PIN.</li>
+      <li><b>Spin the wheel!</b> It lands on who you’re buying for and shows their wish list.</li>
+      <li><b>Keep it a secret</b> and bring your gift to the Christmas Eve party.</li>
     </ol>
-    <div class="steps-f">Want to look again or change your wish list? Tap your name and type your 4 numbers.</div>
+    <div class="steps-f">Come back anytime: tap your name and type your PIN to see your person again or change your wish list.</div>
   </div>
 
   <div id="list"></div>
 </main>
 
-<div class="scrim" id="scrim">
-  <div class="sheet" id="sheet" role="dialog" aria-modal="true"></div>
-</div>
+<div class="scrim" id="scrim"><div class="sheet" id="sheet" role="dialog" aria-modal="true"></div></div>
 
 <script>
 let S = null;
@@ -156,11 +171,18 @@ const $ = (id) => document.getElementById(id);
 const esc = (s) => String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 
 async function load() {
-  try {
-    const r = await fetch('/api/state', { cache: 'no-store' });
-    S = await r.json();
-  } catch { S = { ready: false }; }
+  try { const r = await fetch('/api/state', { cache: 'no-store' }); S = await r.json(); }
+  catch { S = S || { ready: false }; }
   render();
+}
+
+async function me(name, pin, action, extra = {}) {
+  try {
+    const r = await fetch('/api/me', { method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name, pin, action, ...extra }) });
+    const j = await r.json().catch(() => ({}));
+    return { ok: r.ok, ...j };
+  } catch { return { ok: false, message: 'No connection. Try again.' }; }
 }
 
 function render() {
@@ -176,113 +198,168 @@ function render() {
     return;
   }
   const total = S.names.length;
-  const left = S.claimed.filter(c => !c).length;
+  const left = S.drawn.filter(d => !d).length;
+  const noWish = S.wish.filter(w => !w).length;
   const pct = Math.round(((total - left) / total) * 100);
+  const wishLine = noWish
+    ? `<div class="sub2 warn">📝 ${noWish} ${noWish === 1 ? 'person still needs' : 'people still need'} a wish list</div>`
+    : `<div class="sub2 good">✓ Everyone’s wish list is in</div>`;
   $('countCard').innerHTML = left === 0
-    ? `<div class="big">🎉</div><div class="lbl done">Everyone has drawn a name!</div><div class="bar"><i style="width:100%"></i></div>`
-    : `<div class="big">${left}</div><div class="lbl">of ${total} ${total === 1 ? 'person' : 'people'} still need to draw</div><div class="bar"><i style="width:${pct}%"></i></div>`;
+    ? `<div class="big">🎉</div><div class="lbl done">Everyone has spun the wheel!</div><div class="bar"><i style="width:100%"></i></div>${wishLine}`
+    : `<div class="big">${left}</div><div class="lbl">of ${total} still need to spin</div><div class="bar"><i style="width:${pct}%"></i></div>${wishLine}`;
 
-  const btns = S.names.map((n, i) => {
-    const t = S.claimed[i];
-    return `<button class="name ${t ? 'taken' : ''}" data-i="${i}">
-      <span>${esc(n)}</span><span class="tag">${t ? '✓ Drew' : 'Draw'}</span></button>`;
+  const rows = S.names.map((n, i) => {
+    const w = S.wish[i], d = S.drawn[i], set = S.setup[i];
+    let status, pill, cls;
+    if (!w) { status = '<span class="st bad">📝 No wish list yet</span>'; pill = set ? 'Open' : 'Set up'; cls = 'todo'; }
+    else if (!d) { status = '<span class="st ok">✓ Wish list ready</span> <span class="st mute">· hasn’t spun</span>'; pill = 'Spin'; cls = 'ready'; }
+    else { status = '<span class="st ok">✓ Wish list ready · ✓ Spun</span>'; pill = 'Open'; cls = 'done'; }
+    return `<button class="row ${cls}" data-i="${i}">
+        <div><div class="rname">${esc(n)}</div><div class="rstat">${status}</div></div>
+        <span class="tag">${pill}</span></button>`;
   }).join('');
-  $('list').innerHTML = `<h2>👇 Tap your name</h2><div class="grid">${btns}</div>
-    <div class="hint">Tapped the wrong name by accident? Text ${esc(S.organizer || 'the organizer')} and it’ll get fixed.</div>`;
-  $('list').querySelectorAll('.name').forEach(b => b.onclick = () => openFor(+b.dataset.i));
+  $('list').innerHTML = `<h2>👇 Tap your name</h2><div class="rows">${rows}</div>
+    <div class="hint">See someone with <b>“No wish list yet”</b>? Bug them about it! 😄<br>
+    Tapped the wrong name? Text ${esc(S.organizer || 'the organizer')} and it’ll get fixed.</div>`;
+  $('list').querySelectorAll('.row').forEach(b => b.onclick = () => openFor(+b.dataset.i));
 }
 
-function openSheet(html) { $('sheet').innerHTML = html; $('scrim').classList.add('open'); }
+function openSheet(html) { $('sheet').innerHTML = html; $('scrim').classList.add('open'); $('sheet').scrollTop = 0; }
 function closeSheet() { $('scrim').classList.remove('open'); load(); }
-$('scrim').addEventListener('click', e => { if (e.target.id === 'scrim') closeSheet(); });
+$('scrim').addEventListener('click', e => { if (e.target.id === 'scrim' && !window.__spinning) closeSheet(); });
 
-function pinField() {
-  return `<input class="pin" id="pin" type="password" inputmode="numeric" pattern="[0-9]*" maxlength="4" autocomplete="off" placeholder="••••">`;
-}
-
-function wirePin(onGo) {
-  const p = $('pin'), go = $('go');
-  p.addEventListener('input', () => { p.value = p.value.replace(/\D/g, '').slice(0, 4); go.disabled = p.value.length !== 4; $('err').textContent=''; });
-  p.addEventListener('keydown', e => { if (e.key === 'Enter' && p.value.length === 4) onGo(p.value); });
-  go.onclick = () => onGo(p.value);
-  $('cancel').onclick = closeSheet;
-  setTimeout(() => p.focus(), 250);
-}
+const pinField = () => `<input class="pin" id="pin" type="password" inputmode="numeric" pattern="[0-9]*" maxlength="4" autocomplete="off" placeholder="••••">`;
+const wishField = (v) => `<textarea class="wish" id="wish" maxlength="1500" placeholder="Example:&#10;- Target gift card&#10;- Size L hoodie&#10;- Anything coffee">${esc(v || '')}</textarea>`;
+function pinOnly(el) { el.addEventListener('input', () => { el.value = el.value.replace(/\D/g, '').slice(0, 4); }); }
 
 function openFor(i) {
   const name = S.names[i];
-  if (S.claimed[i]) {
-    openSheet(`<h3>Hi ${esc(name)}</h3>
-      <p>You already drew. Enter your 4-digit PIN to see who you got.</p>
-      ${pinField()}<div class="err" id="err"></div>
-      <button class="btn" id="go" disabled>Show my person</button>
-      <button class="btn ghost" id="cancel">Cancel</button>`);
-    wirePin(pin => submit(name, pin, 'view'));
-  } else {
-    openSheet(`<h3>Are you ${esc(name)}?</h3>
-      <p>Make up a 4-digit PIN. You’ll need it if you want to look at your person again later.</p>
-      ${pinField()}<div class="err" id="err"></div>
-      <button class="btn" id="go" disabled>Draw my name 🎁</button>
-      <button class="btn ghost" id="cancel">Not me</button>`);
-    wirePin(pin => submit(name, pin, 'claim'));
-  }
+  if (!S.setup[i]) return S.wish[i] ? openNewPin(name) : openSetup(name);
+  openSheet(`<h3>Hi ${esc(name)} 👋</h3>
+    <p>Type your 4-number PIN.</p>
+    ${pinField()}<div class="err" id="err"></div>
+    <button class="btn" id="go">Continue</button>
+    <button class="btn ghost" id="cancel">Cancel</button>`);
+  const p = $('pin'); pinOnly(p); setTimeout(() => p.focus(), 250);
+  const go = async () => {
+    if (p.value.length !== 4) return $('err').textContent = 'Type all 4 numbers.';
+    $('go').disabled = true;
+    const r = await me(name, p.value, 'login');
+    if (!r.ok) { $('err').textContent = r.message || 'Something went wrong.'; $('go').disabled = false; p.value = ''; p.focus(); return; }
+    panel(name, p.value, r, false);
+  };
+  $('go').onclick = go; p.onkeydown = e => { if (e.key === 'Enter') go(); };
+  $('cancel').onclick = closeSheet;
 }
 
-async function submit(name, pin, mode) {
-  $('go').disabled = true;
-  if (mode === 'claim') audioInit();
-  let r, j;
-  try {
-    r = await fetch('/api/claim', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ name, pin, mode }) });
-    j = await r.json();
-  } catch { $('err').textContent = 'No connection. Try again.'; $('go').disabled = false; return; }
+function openNewPin(name) {
+  openSheet(`<h3>Hi ${esc(name)} 👋</h3>
+    <p>Make up a new 4-number PIN. Your wish list and your person are still saved.</p>
+    ${pinField()}<div class="err" id="err"></div>
+    <button class="btn" id="go">Save PIN</button>
+    <button class="btn ghost" id="cancel">That’s not me</button>`);
+  const p = $('pin'); pinOnly(p); setTimeout(() => p.focus(), 250);
+  $('cancel').onclick = closeSheet;
+  $('go').onclick = async () => {
+    if (p.value.length !== 4) return $('err').textContent = 'Your PIN needs 4 numbers.';
+    $('go').disabled = true;
+    const r = await me(name, p.value, 'setup', { wish: '' });
+    if (!r.ok) { $('err').textContent = r.message || 'Something went wrong.'; $('go').disabled = false; return; }
+    panel(name, p.value, r, true);
+  };
+}
 
-  if (!r.ok) {
-    $('err').textContent = j.message || 'Something went wrong.';
-    if (j.error === 'taken' || j.error === 'unclaimed') setTimeout(() => { closeSheet(); }, 1800);
-    else { $('go').disabled = false; $('pin').value = ''; $('pin').focus(); $('go').disabled = true; }
+function openSetup(name) {
+  openSheet(`<h3>Hi ${esc(name)}! 🎄</h3>
+    <div class="stepnum"><span>1</span> What would you like for Christmas?</div>
+    <p class="small">Sizes, favorite colors, stores, hobbies, anything. Whoever gets your name will see this.</p>
+    ${wishField('')}
+    <div class="stepnum" style="margin-top:18px"><span>2</span> Make up any 4 numbers</div>
+    <p class="small">This is your PIN. You’ll use it to come back and see your person later.</p>
+    ${pinField()}<div class="err" id="err"></div>
+    <button class="btn" id="go">Save & continue</button>
+    <button class="btn ghost" id="cancel">That’s not me</button>`);
+  pinOnly($('pin'));
+  $('cancel').onclick = closeSheet;
+  $('go').onclick = async () => {
+    const w = $('wish').value.trim(), p = $('pin').value;
+    if (!w) return $('err').textContent = 'Type at least one thing you’d like.';
+    if (p.length !== 4) return $('err').textContent = 'Your PIN needs 4 numbers.';
+    $('go').disabled = true;
+    const r = await me(name, p, 'setup', { wish: w });
+    if (!r.ok) { $('err').textContent = r.message || 'Something went wrong.'; $('go').disabled = false; return; }
+    panel(name, p, r, true);
+  };
+}
+
+function mySection(name, pin, data, onSaved) {
+  return {
+    html: `<div class="mine">
+        <div class="h">📝 Your wish list</div>
+        <p>Whoever got your name sees this. You can change it anytime.</p>
+        ${wishField(data.myWish)}
+        <button class="btn green" id="saveWish">Save my wish list</button>
+        <div class="saved" id="saved"></div>
+      </div>`,
+    wire() {
+      $('wish').addEventListener('input', () => { $('saved').textContent = ''; });
+      $('saveWish').onclick = async () => {
+        const b = $('saveWish'); b.disabled = true; $('saved').textContent = 'Saving…';
+        const r = await me(name, pin, 'wish', { wish: $('wish').value });
+        b.disabled = false;
+        if (!r.ok) { $('saved').textContent = r.message || 'Couldn’t save. Try again.'; return; }
+        $('saved').textContent = r.myWish ? '✓ Saved!' : 'Saved (your list is empty).';
+        if (onSaved) onSaved(r);
+      };
+    },
+  };
+}
+
+function panel(name, pin, data, firstTime) {
+  const pinNote = firstTime ? `<div class="note">🔑 Your PIN is <b>${esc(pin)}</b>. Remember it (or screenshot this) so you can come back later.</div>` : '';
+  if (!data.receiver) {
+    const can = !!data.myWish;
+    const mine = mySection(name, pin, data, r => { if (!!r.myWish !== can) panel(name, pin, r, firstTime); });
+    openSheet(`<div class="reveal">
+        <div class="gift">✅</div>
+        <h3 style="margin-bottom:4px">You’re all set, ${esc(name)}!</h3>
+        <p style="margin-bottom:12px">Now spin the wheel to find out who you’re buying for.</p>
+        ${pinNote}
+        <button class="btn spinbtn" id="spin" ${can ? '' : 'disabled'}>🎰 Spin the wheel</button>
+        ${can ? '' : '<div class="err">Add your wish list below first.</div>'}
+        <div class="err" id="err"></div>
+      </div>
+      ${mine.html}
+      <button class="btn ghost" id="cancel">Close</button>`);
+    mine.wire();
+    $('cancel').onclick = closeSheet;
+    $('spin').onclick = async () => {
+      audioInit();
+      $('spin').disabled = true;
+      const r = await me(name, pin, 'draw');
+      if (!r.ok || !r.receiver) { $('err').textContent = r.message || 'Something went wrong.'; $('spin').disabled = false; return; }
+      if (r.justDrew) { await spinWheel(name, r.receiver); panel(name, pin, r, false); confetti(); }
+      else panel(name, pin, r, false);
+    };
     return;
   }
-
-  if (mode === 'claim') {
-    await spinWheel(name, j.receiver);
-  }
-  showResult(name, pin, j, mode === 'claim');
-  if (mode === 'claim') confetti();
-}
-
-function showResult(name, pin, j, firstTime) {
-  const r = j.receiver;
-  const theirs = j.theirWish
-    ? `<div class="t">${esc(j.theirWish)}</div>`
-    : `<div class="t none">${esc(r)} hasn’t written a wish list yet. Check back later: tap your name and type your PIN.</div>`;
+  const rcv = data.receiver;
+  const theirs = data.theirWish
+    ? `<div class="t">${esc(data.theirWish)}</div>`
+    : `<div class="t none">${esc(rcv)} hasn’t added a wish list yet. It’ll show up here once they do. Tap your name again later to check.</div>`;
+  const mine = mySection(name, pin, data);
   openSheet(`<div class="reveal">
       <div class="gift">🎁</div>
       <div class="for">${esc(name)}, you’re getting a gift for</div>
-      <div class="who">${esc(r)}</div>
-      <div class="wishbox"><div class="h">🎄 What ${esc(r)} wants</div>${theirs}</div>
-      <div class="note">🤫 Keep it a secret!${firstTime ? `<br>Your PIN is <b>${esc(pin)}</b>. Remember it (or screenshot this) so you can check again later.` : ''}</div>
+      <div class="who">${esc(rcv)}</div>
+      <div class="wishbox"><div class="h">🎄 What ${esc(rcv)} wants</div>${theirs}</div>
+      <div class="note">🤫 Keep it a secret!</div>
+      ${pinNote}
     </div>
-    <div class="mine">
-      <div class="h">📝 Your wish list</div>
-      <p>Type a few things you’d like (sizes, favorite colors, stores, anything). Whoever got your name will see this.</p>
-      <textarea class="wish" id="wish" maxlength="1500" placeholder="Example:&#10;- Gift card to Target&#10;- Size L hoodie&#10;- Anything coffee">${esc(j.myWish)}</textarea>
-      <button class="btn green" id="saveWish">Save my wish list</button>
-      <div class="saved" id="saved"></div>
-    </div>
+    ${mine.html}
     <button class="btn ghost" id="cancel">Done</button>`);
+  mine.wire();
   $('cancel').onclick = closeSheet;
-  $('wish').addEventListener('input', () => { $('saved').textContent = ''; });
-  $('saveWish').onclick = async () => {
-    const b = $('saveWish'); b.disabled = true; $('saved').textContent = 'Saving…';
-    try {
-      const res = await fetch('/api/claim', { method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ name, pin, mode: 'wish', wish: $('wish').value }) });
-      const out = await res.json();
-      $('saved').textContent = res.ok ? '✓ Saved! Your Secret Santa can see it now.' : (out.message || 'Couldn’t save. Try again.');
-    } catch { $('saved').textContent = 'No connection. Try again.'; }
-    b.disabled = false;
-  };
 }
 
 // ---------- prize wheel ----------
@@ -326,6 +403,7 @@ function wheelSVG(names) {
 }
 
 function spinWheel(self, receiver) {
+  window.__spinning = true;
   return new Promise(resolve => {
     let names = S.names.filter(n => n !== self);
     if (!names.includes(receiver)) names.push(receiver);
@@ -353,7 +431,7 @@ function spinWheel(self, receiver) {
       tick(true);
       try { navigator.vibrate && navigator.vibrate([80, 50, 120]); } catch {}
       document.getElementById('wcap').innerHTML = `🎉 <b>${esc(receiver)}</b>!`;
-      setTimeout(resolve, 1300);
+      setTimeout(() => { window.__spinning = false; resolve(); }, 1300);
     };
     requestAnimationFrame(frame);
   });
@@ -383,7 +461,6 @@ for (let i = 0; i < 18; i++) {
   f.style.animationDelay = (-Math.random() * 18) + 's';
   document.body.appendChild(f);
 }
-
 load();
 setInterval(() => { if (!$('scrim').classList.contains('open')) load(); }, 20000);
 </script>

@@ -118,49 +118,52 @@ function drawForm(c) {
 function showMain(d) {
   DATA = d;
   const c = d.config || {};
-  if (!d.drawn) {
-    $('app').innerHTML = `<div class="card"><h2>Set up the drawing</h2>${detailsForm(c)}${drawForm(c)}
-      <button class="btn" id="draw">Draw names & open it up 🎁</button><div class="msg" id="m"></div></div>`;
+  if (!d.config) {
+    $('app').innerHTML = `<div class="card"><h2>Set up the Secret Santa</h2>${detailsForm(c)}${drawForm(c)}
+      <button class="btn" id="draw">Open it up 🎁</button><div class="msg" id="m"></div></div>`;
     $('draw').onclick = () => doDraw(false);
     return;
   }
-  const done = d.claimed.filter(Boolean).length, total = c.names.length, wl = d.wishes.filter(Boolean).length;
+  const done = d.drawn.filter(Boolean).length, total = c.names.length, wl = d.wish.filter(Boolean).length;
   const rows = c.names.map((n, i) => `<tr><td><b>${esc(n)}</b></td>
-      <td>${d.claimed[i] ? '<span class="ok">✓ Drew</span>' : '<span class="no">Waiting</span>'}</td>
-      <td>${d.wishes[i] ? '<span class="ok">✓</span>' : '<span class="no">–</span>'}</td>
-      <td style="text-align:right">${d.claimed[i] ? `<button class="btn light small" data-reset="${esc(n)}">Reset</button>` : ''}</td></tr>`).join('');
+      <td>${d.wish[i] ? '<span class="ok">✓</span>' : '<span class="no">–</span>'}</td>
+      <td>${d.drawn[i] ? '<span class="ok">✓</span>' : '<span class="no">–</span>'}</td>
+      <td style="text-align:right;white-space:nowrap">${d.setup[i] ? `<button class="btn light small" data-pin="${esc(n)}">New PIN</button> <button class="btn light small" data-reset="${esc(n)}">Reset</button>` : ''}</td></tr>`).join('');
   $('app').innerHTML = `
     <div class="card"><h2>Progress</h2>
-      <div class="stat"><b>${done}</b> of ${total} have drawn · <b>${wl}</b> wish ${wl === 1 ? 'list' : 'lists'} written</div>
-      <table><tr><th>Name</th><th>Status</th><th>List</th><th></th></tr>${rows}</table>
-      <p class="sub" style="font-size:13px">Reset = someone tapped the wrong name or forgot their PIN. It clears their PIN and wish list so they can tap their name again. They still get the same person.</p>
+      <div class="stat"><b>${done}</b> of ${total} have spun · <b>${wl}</b> of ${total} wish lists in</div>
+      <table><tr><th>Name</th><th>List</th><th>Spun</th><th></th></tr>${rows}</table>
+      <p class="sub" style="font-size:13px"><b>New PIN</b> = they forgot their PIN or got locked out. Keeps their wish list and their person; they just make a new PIN.<br>
+      <b>Reset</b> = someone else used their name by mistake. Clears the PIN, wish list and spin so the real person can start fresh.</p>
       <button class="btn light" id="refresh">Refresh</button><div class="msg" id="rm"></div>
     </div>
     <div class="card"><details><summary>Edit title, price, party</summary>${detailsForm(c)}
       <button class="btn green" id="saveDetails">Save</button><div class="msg" id="dm"></div></details></div>
-    <div class="card"><details><summary>Change names / redraw everyone</summary>
-      <p class="sub">Only if you need to add or remove someone. This makes a brand new drawing. Everyone who already drew has to draw again, and wish lists get cleared.</p>
-      ${drawForm(c)}<button class="btn" id="redraw">Redraw everyone</button><div class="msg" id="m"></div></details></div>
+    <div class="card"><details><summary>Change names / start over</summary>
+      <p class="sub">This wipes everything: every PIN, wish list and spin. Use it after testing, or if the names change after people already started.</p>
+      ${drawForm(c)}<button class="btn" id="redraw">Start over with these names</button><div class="msg" id="m"></div></details></div>
     <div class="card"><details id="bk"><summary>Backup: who got who</summary>
       <p class="sub">Only for fixing problems.</p>
       <button class="btn light" id="reveal">Show matches</button><div id="pairs"></div></details></div>`;
 
   $('refresh').onclick = async () => { const r = await api('load'); if (r.ok) showMain(r); };
-  document.querySelectorAll('[data-reset]').forEach(b => b.onclick = async () => {
-    const n = b.dataset.reset;
-    if (b.dataset.armed !== '1') { b.dataset.armed = '1'; b.textContent = 'Tap to confirm'; return; }
-    const r = await api('reset', { name: n });
+  const wireAct = (attr, action, label, done) => document.querySelectorAll(`[data-${attr}]`).forEach(b => b.onclick = async () => {
+    const n = b.dataset[attr];
+    if (b.dataset.armed !== '1') { b.dataset.armed = '1'; b.textContent = 'Confirm?'; return; }
+    const r = await api(action, { name: n });
     if (!r.ok) return msg('rm', r.message);
     const t = await api('load'); if (t.ok) showMain(t);
-    msg('rm', `${n} was reset. They can tap their name again.`, true);
+    msg('rm', done(n), true);
   });
+  wireAct('pin', 'newpin', 'New PIN', n => `${n} can tap their name and make a new PIN. Their list and person are kept.`);
+  wireAct('reset', 'reset', 'Reset', n => `${n} was fully reset and can start fresh.`);
   $('saveDetails').onclick = async () => {
     const r = await api('details', details());
     msg('dm', r.ok ? 'Saved.' : r.message, r.ok);
   };
   $('redraw').onclick = () => {
     const b = $('redraw');
-    if (b.dataset.armed !== '1') { b.dataset.armed = '1'; b.textContent = 'Tap again to redraw everyone'; return; }
+    if (b.dataset.armed !== '1') { b.dataset.armed = '1'; b.textContent = 'Tap again to wipe everything and start over'; return; }
     doDraw(true);
   };
   $('reveal').onclick = async () => {
@@ -170,7 +173,7 @@ function showMain(d) {
     b.dataset.armed = '';
     const r = await api('reveal');
     if (!r.ok) return;
-    $('pairs').innerHTML = `<table style="margin-top:10px"><tr><th>Giver</th><th></th><th>Buys for</th></tr>${r.pairs.map(([a, z]) => `<tr><td>${esc(a)}</td><td>→</td><td><b>${esc(z)}</b></td></tr>`).join('')}</table>`;
+    $('pairs').innerHTML = `<table style="margin-top:10px"><tr><th>Giver</th><th></th><th>Buys for</th></tr>${r.pairs.map(([a, z]) => `<tr><td>${esc(a)}</td><td>→</td><td>${z ? `<b>${esc(z)}</b>` : '<span class="no">hasn’t spun</span>'}</td></tr>`).join('')}</table>`;
     b.textContent = 'Hide matches';
   };
 }
@@ -179,8 +182,8 @@ async function doDraw(isRedraw) {
   const d = details();
   const payload = { ...d, names: parseNames($('names').value), groups: parseGroups($('groups').value), confirm: isRedraw };
   if (payload.names.length < 3) return msg('m', 'Add at least 3 names.');
-  msg('m', 'Drawing…', true);
-  const r = await api('draw', payload);
+  msg('m', 'Saving…', true);
+  const r = await api('open', payload);
   if (!r.ok) return msg('m', r.message || 'Something went wrong.');
   const t = await api('load');
   showMain(t);

@@ -1,4 +1,7 @@
-import { db, getJSON, K, send, body, hashSecret, checkSecret, drawNames, claimedList, handleErr } from './_lib.js';
+import {
+  db, getJSON, K, send, body, hashSecret, checkSecret, handleErr,
+  statusOf, withLock, makeAllowed, canFinish,
+} from './_lib.js';
 
 const clean = (s, max = 80) => String(s ?? '').replace(/\s+/g, ' ').trim().slice(0, max);
 
@@ -18,7 +21,6 @@ export default async function handler(req, res) {
       return send(res, 200, { ok: true });
     }
 
-    // everything below needs the organizer password
     const fails = Number((await db('GET', K.adminFails)) || 0);
     if (fails >= 10) return send(res, 429, { error: 'slow', message: 'Too many wrong passwords. Wait 15 minutes.' });
     if (!stored || !checkSecret(b.password || '', stored)) {
@@ -30,22 +32,22 @@ export default async function handler(req, res) {
 
     const config = await getJSON(K.config);
     const round = await db('GET', K.round);
-    const hasDraw = !!(await db('GET', K.assign));
 
     if (b.action === 'load') {
-      const claimed = config && hasDraw ? await claimedList(round, config.names) : [];
-      const wishes = config && hasDraw ? (await db('MGET', ...config.names.map(n => K.wish(round, n)))).map(v => !!v) : [];
-      return send(res, 200, { config, drawn: hasDraw, claimed, wishes });
+      if (!config) return send(res, 200, { config: null });
+      const st = await statusOf(round, config.names);
+      return send(res, 200, { config, setup: st.setup, wish: st.wish, drawn: st.drawn });
     }
 
     if (b.action === 'details') {
-      if (!config) return send(res, 409, { error: 'none', message: 'Draw names first.' });
+      if (!config) return send(res, 409, { error: 'none', message: 'Set up the names first.' });
       const next = { ...config, title: clean(b.title) || config.title, organizer: clean(b.organizer, 40), price: clean(b.price, 40), date: clean(b.date, 60) };
       await db('SET', K.config, JSON.stringify(next));
       return send(res, 200, { ok: true });
     }
 
-    if (b.action === 'draw') {
+    // Start (or restart) with a list of names. Wipes all PINs, wish lists and draws.
+    if (b.action === 'open') {
       const names = [...new Set((b.names || []).map(n => clean(n, 40)).filter(Boolean))];
       if (names.length < 3) return send(res, 400, { error: 'few', message: 'Need at least 3 names.' });
       const lower = new Map(names.map(n => [n.toLowerCase(), n]));
@@ -59,38 +61,49 @@ export default async function handler(req, res) {
         }
         if (members.length > 1) groups.push(members);
       }
-      if (hasDraw && config) {
-        const claimed = await claimedList(round, config.names);
-        if (claimed.some(Boolean) && !b.confirm) {
-          return send(res, 409, { error: 'confirm', message: 'Some people already drew. Redrawing wipes their picks.' });
-        }
+      if (!canFinish(names, names, makeAllowed(groups))) {
+        return send(res, 400, { error: 'impossible', message: 'Those couple rules make a full drawing impossible. Check the lists.' });
       }
-      const assign = drawNames(names, groups);
-      if (!assign) return send(res, 400, { error: 'impossible', message: 'Can’t make a draw with those couple rules. Check the lists.' });
-      const next = {
-        title: clean(b.title) || 'Gift Exchange',
+      if (config && !b.confirm) {
+        const st = await statusOf(round, config.names);
+        if (st.setup.some(Boolean)) return send(res, 409, { error: 'confirm', message: 'People already set up. Starting over wipes everything.' });
+      }
+      await db('INCR', K.round);
+      await db('SET', K.config, JSON.stringify({
+        title: clean(b.title) || 'Secret Santa',
         organizer: clean(b.organizer, 40),
         price: clean(b.price, 40),
         date: clean(b.date, 60),
-        names,
-        groups,
-      };
-      await db('INCR', K.round); // new round = all old claims and PINs are void
-      await db('SET', K.config, JSON.stringify(next));
-      await db('SET', K.assign, JSON.stringify(assign));
+        names, groups,
+      }));
       return send(res, 200, { ok: true });
     }
 
+    if (!config || !config.names.includes(b.name)) {
+      if (['newpin', 'reset'].includes(b.action)) return send(res, 404, { error: 'name', message: 'Name not found.' });
+    }
+
+    // Forgot PIN / locked out: keeps their wish list and their person
+    if (b.action === 'newpin') {
+      await db('DEL', K.pin(round, b.name), K.fails(round, b.name));
+      return send(res, 200, { ok: true });
+    }
+
+    // Wrong person used this name: clears PIN, wish list, and their draw
     if (b.action === 'reset') {
-      if (!config || !config.names.includes(b.name)) return send(res, 404, { error: 'name', message: 'Name not found.' });
-      await db('DEL', K.claim(round, b.name), K.fails(round, b.name), K.wish(round, b.name));
+      await withLock(round, async () => {
+        const assign = (await getJSON(K.assign(round))) || {};
+        delete assign[b.name];
+        await db('SET', K.assign(round), JSON.stringify(assign));
+      });
+      await db('DEL', K.pin(round, b.name), K.fails(round, b.name), K.wish(round, b.name));
       return send(res, 200, { ok: true });
     }
 
     if (b.action === 'reveal') {
-      const assign = await getJSON(K.assign);
-      if (!assign || !config) return send(res, 409, { error: 'none', message: 'Nothing drawn yet.' });
-      return send(res, 200, { pairs: config.names.map(n => [n, assign[n]]) });
+      if (!config) return send(res, 409, { error: 'none', message: 'Nothing set up yet.' });
+      const assign = (await getJSON(K.assign(round))) || {};
+      return send(res, 200, { pairs: config.names.map(n => [n, assign[n] || null]) });
     }
 
     return send(res, 400, { error: 'action' });
