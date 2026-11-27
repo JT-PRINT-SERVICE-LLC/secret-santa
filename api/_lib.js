@@ -1,7 +1,15 @@
 import crypto from 'node:crypto';
 
-const DB_URL = process.env.KV_REST_API_URL || process.env.UPSTASH_REDIS_REST_URL;
-const DB_TOKEN = process.env.KV_REST_API_TOKEN || process.env.UPSTASH_REDIS_REST_TOKEN;
+// Find the Upstash REST settings however Vercel prefixed them (KV_, STORAGE_, UPSTASH_REDIS_, etc.)
+function findEnv(suffixes) {
+  for (const s of suffixes) if (process.env[s]) return process.env[s];
+  for (const [k, v] of Object.entries(process.env)) {
+    if (v && suffixes.some(s => k.endsWith('_' + s) || k.endsWith(s)) && !k.includes('READ_ONLY')) return v;
+  }
+  return undefined;
+}
+const DB_URL = findEnv(['KV_REST_API_URL', 'UPSTASH_REDIS_REST_URL', 'REDIS_REST_URL']);
+const DB_TOKEN = findEnv(['KV_REST_API_TOKEN', 'UPSTASH_REDIS_REST_TOKEN', 'REDIS_REST_TOKEN']);
 
 export const MAX_PIN_TRIES = 8;
 const P = 'gx:';
