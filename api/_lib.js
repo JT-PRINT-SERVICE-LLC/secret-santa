@@ -143,10 +143,9 @@ export function pickReceiver(giver, names, assign, allowed, hasWish) {
   const restG = givers.filter(n => n !== giver);
   const ok = receivers.filter(r => allowed(giver, r) && canFinish(restG, receivers.filter(x => x !== r), allowed));
   if (!ok.length) return null;
-  // Prefer people who have a wish list, but only when there are at least 3 of them to pick from.
-  // With fewer, picking only from them makes the draw guessable (2nd person to join always gets the 1st).
+  // Always pick someone who has a wish list if any are available; otherwise anyone allowed.
   const withWish = ok.filter(r => hasWish.has(r));
-  const pool = withWish.length >= 3 ? withWish : ok;
+  const pool = withWish.length ? withWish : ok;
   return pool[crypto.randomInt(pool.length)];
 }
 
