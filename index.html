@@ -248,7 +248,7 @@ $('scrim').addEventListener('click', e => { if (e.target.id === 'scrim' && !wind
 const pinField = () => `<input class="pin" id="pin" type="password" inputmode="numeric" pattern="[0-9]*" maxlength="4" autocomplete="off" placeholder="••••">`;
 const wishField = (v) => `<textarea class="wish" id="wish" maxlength="1500" placeholder="Example:&#10;- Target gift card&#10;- Size L hoodie&#10;- Anything coffee">${esc(v || '')}</textarea>`;
 // ---------- links ----------
-function hostOf(u) { try { return new URL(u).hostname.replace(/^www\./, ''); } catch { return 'link'; } }
+function hostOf(u) { try { const h = new URL(u).hostname.replace(/^www\./, ''); return /^(a\.co|amzn\.to|amzn\.com|amazon\.[a-z.]+)$/i.test(h) ? 'Amazon' : h; } catch { return 'link'; } }
 function linkRow(l) {
   return `<div class="lrow">
       <div class="lfields">
@@ -280,6 +280,34 @@ function readLinks() {
     .map(r => ({ url: r.querySelector('.lurl').value.trim(), note: r.querySelector('.lnote').value.trim() }))
     .filter(l => l.url || l.note);
 }
+// Display-only: pull links typed into wish list text out into link cards. Never saved.
+function splitWishLinks(text) {
+  const URL_G = /https?:\/\/[^\s<>"]+/gi;
+  const lines = String(text || '').replace(/\r/g, '').split('\n');
+  const keep = [], links = [];
+  const tidy = s => s.replace(/^[\s\-–—•*·>]+/, '').replace(/[\s\-–—:|·,(\[]+$/, '').trim();
+  const unparen = s => { const t = s.trim(); const m = t.match(/^\((.*)\)$/); return (m ? m[1] : t).trim(); };
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i];
+    const found = line.match(URL_G) || [];
+    if (found.length !== 1) { keep.push(line); continue; }   // no link, or several on one line: leave as text
+    const raw = found[0];
+    const url = raw.replace(/[).,!?]+$/, '');
+    try { const u = new URL(url); if (!/^https?:$/.test(u.protocol)) throw 0; } catch { keep.push(line); continue; }
+    const at = line.indexOf(raw);
+    const before = tidy(line.slice(0, at));
+    let after = line.slice(at + url.length).trim();
+    if (after.startsWith(')') && !after.includes('(')) after = after.slice(1).trim();
+    const extras = [];
+    if (tidy(after)) extras.push(unparen(tidy(after)));
+    const next = lines[i + 1];
+    if (next !== undefined && /^\s*\([^()]*\)\s*$/.test(next) && !URL_G.test(next)) { extras.push(unparen(next)); i++; }
+    URL_G.lastIndex = 0;
+    links.push({ url, note: [before, ...extras].filter(Boolean).join(' · ') });
+  }
+  return { text: keep.join('\n').replace(/\n{3,}/g, '\n\n').trim(), links };
+}
+
 // Make links typed into the wish list text tappable (text is escaped first)
 function linkify(text) {
   return esc(text).replace(/https?:\/\/[^\s<]+/gi, m => {
@@ -413,8 +441,10 @@ function panel(name, pin, data, firstTime) {
     return;
   }
   const rcv = data.receiver;
-  const theirs = (data.theirWish || data.theirLinks.length)
-    ? `${data.theirWish ? `<div class="t">${linkify(data.theirWish)}</div>` : ''}${linkCards(data.theirLinks)}`
+  const sp = splitWishLinks(data.theirWish);
+  const allLinks = [...sp.links, ...(data.theirLinks || [])];
+  const theirs = (sp.text || allLinks.length)
+    ? `${sp.text ? `<div class="t">${linkify(sp.text)}</div>` : ''}${linkCards(allLinks)}`
     : `<div class="t none">${esc(rcv)} hasn’t added a wish list yet. It’ll show up here once they do. Tap your name again later to check.</div>`;
   const mine = mySection(name, pin, data);
   openSheet(`<div class="reveal">

@@ -97,6 +97,34 @@ function showLogin() {
   $('go').onclick = go; $('p').onkeydown = e => { if (e.key === 'Enter') go(); };
 }
 
+// Display-only: pull links typed into wish list text out into link cards. Never saved.
+function splitWishLinks(text) {
+  const URL_G = /https?:\/\/[^\s<>"]+/gi;
+  const lines = String(text || '').replace(/\r/g, '').split('\n');
+  const keep = [], links = [];
+  const tidy = s => s.replace(/^[\s\-–—•*·>]+/, '').replace(/[\s\-–—:|·,(\[]+$/, '').trim();
+  const unparen = s => { const t = s.trim(); const m = t.match(/^\((.*)\)$/); return (m ? m[1] : t).trim(); };
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i];
+    const found = line.match(URL_G) || [];
+    if (found.length !== 1) { keep.push(line); continue; }   // no link, or several on one line: leave as text
+    const raw = found[0];
+    const url = raw.replace(/[).,!?]+$/, '');
+    try { const u = new URL(url); if (!/^https?:$/.test(u.protocol)) throw 0; } catch { keep.push(line); continue; }
+    const at = line.indexOf(raw);
+    const before = tidy(line.slice(0, at));
+    let after = line.slice(at + url.length).trim();
+    if (after.startsWith(')') && !after.includes('(')) after = after.slice(1).trim();
+    const extras = [];
+    if (tidy(after)) extras.push(unparen(tidy(after)));
+    const next = lines[i + 1];
+    if (next !== undefined && /^\s*\([^()]*\)\s*$/.test(next) && !URL_G.test(next)) { extras.push(unparen(next)); i++; }
+    URL_G.lastIndex = 0;
+    links.push({ url, note: [before, ...extras].filter(Boolean).join(' · ') });
+  }
+  return { text: keep.join('\n').replace(/\n{3,}/g, '\n\n').trim(), links };
+}
+
 function parseNames(t) { return t.split(/\n|,/).map(s => s.trim()).filter(Boolean); }
 function parseGroups(t) {
   return t.split('\n').map(l => l.split(/\s*(?:\+|,|&|\/|\band\b)\s*/i).map(s => s.trim()).filter(Boolean)).filter(g => g.length > 1);
@@ -169,10 +197,11 @@ function showMain(d) {
     e.preventDefault();
     const n = a.dataset.vw, r = await api('viewwish', { name: n });
     if (!r.ok) return msg('rm', r.message || 'Couldn’t load it.');
-    const host = u => { try { return new URL(u).hostname.replace(/^www\./, ''); } catch { return 'link'; } };
+    const host = u => { try { const h = new URL(u).hostname.replace(/^www\./, ''); return /^(a\.co|amzn\.to|amzn\.com|amazon\.[a-z.]+)$/i.test(h) ? 'Amazon' : h; } catch { return 'link'; } };
+    const sp = splitWishLinks(r.wish); const all = [...sp.links, ...r.links];
     $('wishView').innerHTML = `<div class="card"><h2>${esc(n)}’s wish list</h2>
-      ${r.wish ? `<div style="white-space:pre-wrap;font-size:16px;line-height:1.45">${esc(r.wish)}</div>` : '<p class="sub">No text.</p>'}
-      ${r.links.length ? `<div style="margin-top:12px">${r.links.map(l => `<a href="${esc(l.url)}" target="_blank" rel="noopener noreferrer nofollow" style="display:block;border:1px solid var(--line);border-radius:10px;padding:10px 12px;margin-bottom:8px;color:var(--ink);text-decoration:none"><b>${esc(l.note || 'Link')}</b><br><span style="color:var(--green);font-size:13px">🔗 ${esc(host(l.url))} ↗</span></a>`).join('')}</div>` : '<p class="sub">No links.</p>'}
+      ${sp.text ? `<div style="white-space:pre-wrap;font-size:16px;line-height:1.45">${esc(sp.text)}</div>` : '<p class="sub">No text.</p>'}
+      ${all.length ? `<div style="margin-top:12px">${all.map(l => `<a href="${esc(l.url)}" target="_blank" rel="noopener noreferrer nofollow" style="display:block;border:1px solid var(--line);border-radius:10px;padding:10px 12px;margin-bottom:8px;color:var(--ink);text-decoration:none"><b>${esc(l.note || 'Link')}</b><br><span style="color:var(--green);font-size:13px">🔗 ${esc(host(l.url))} ↗</span></a>`).join('')}</div>` : '<p class="sub">No links.</p>'}
       <button class="btn light" id="closeWV">Close</button></div>`;
     $('closeWV').onclick = () => { $('wishView').innerHTML = ''; };
     $('wishView').scrollIntoView({ behavior: 'smooth' });
