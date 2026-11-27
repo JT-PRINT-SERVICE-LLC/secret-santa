@@ -22,6 +22,7 @@ export const K = {
   pin: (r, n) => `${P}pin:${r}:${enc(n)}`,
   fails: (r, n) => `${P}fails:${r}:${enc(n)}`,
   wish: (r, n) => `${P}wish:${r}:${enc(n)}`,
+  links: (r, n) => `${P}links:${r}:${enc(n)}`,
   assign: (r) => `${P}assign:${r}`,
   lock: (r) => `${P}lock:${r}`,
   log: P + 'log',
@@ -149,15 +150,48 @@ export function pickReceiver(giver, names, assign, allowed, hasWish) {
   return pool[crypto.randomInt(pool.length)];
 }
 
+// ---------- wish list links ----------
+const MAX_LINKS = 25;
+export function parseLinks(v) {
+  if (!v) return [];
+  try { const a = JSON.parse(v); return Array.isArray(a) ? a : []; } catch { return []; }
+}
+// Accepts [{url, note}], pulls the real link out of share text like "Check out this item on Amazon https://a.co/d/xyz"
+export function cleanLinks(arr) {
+  const out = []; let skipped = 0;
+  for (const item of (arr || []).slice(0, MAX_LINKS)) {
+    let raw = String(item?.url ?? '').trim();
+    let note = String(item?.note ?? '').replace(/\s+/g, ' ').trim().slice(0, 200);
+    if (!raw && !note) continue;
+    const found = raw.match(/https?:\/\/[^\s<>"]+/i);
+    let url = found ? found[0] : (/^[^\s]+\.[a-z]{2,}(\/\S*)?$/i.test(raw) ? 'https://' + raw : '');
+    url = url.replace(/[).,!?]+$/, '');
+    try {
+      const u = new URL(url);
+      if (!/^https?:$/.test(u.protocol) || url.length > 2000) throw 0;
+      if (found && !note) {
+        const leftover = raw.replace(found[0], '').replace(/\s+/g, ' ').trim();
+        if (leftover) note = leftover.slice(0, 200);
+      }
+      out.push({ url: u.toString(), note });
+    } catch { skipped++; }
+  }
+  return { links: out, skipped };
+}
+export async function hasListFor(round, name) {
+  const [w, l] = await db('MGET', K.wish(round, name), K.links(round, name));
+  return !!w || parseLinks(l).length > 0;
+}
+
 // ---------- status ----------
 export async function statusOf(round, names) {
   if (!names.length) return { setup: [], wish: [], drawn: [], assign: {} };
-  const vals = await db('MGET', ...names.map(n => K.pin(round, n)), ...names.map(n => K.wish(round, n)));
+  const vals = await db('MGET', ...names.map(n => K.pin(round, n)), ...names.map(n => K.wish(round, n)), ...names.map(n => K.links(round, n)));
   const assign = (await getJSON(K.assign(round))) || {};
   const n = names.length;
   return {
     setup: vals.slice(0, n).map(v => v !== null),
-    wish: vals.slice(n).map(v => !!v),
+    wish: names.map((_, i) => !!vals[n + i] || parseLinks(vals[2 * n + i]).length > 0),
     drawn: names.map(x => x in assign),
     assign,
   };

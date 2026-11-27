@@ -133,6 +133,19 @@
   .stepnum{display:flex;align-items:center;gap:10px;font-weight:700;font-size:18px;margin:6px 0 4px}
   .stepnum span{width:30px;height:30px;border-radius:50%;background:var(--red);color:#fff;display:flex;align-items:center;justify-content:center;font-size:15px;flex:none}
   .sheet p.small{font-size:15px;margin:0 0 10px}
+  .btn.light{background:#efe6d8;color:var(--ink)}
+  .lhead{font-weight:700;font-size:17px;margin:16px 0 2px}
+  .lhead span{font-weight:400;color:var(--muted);font-size:14px}
+  .lrow{display:flex;gap:8px;align-items:flex-start;margin-bottom:10px;padding:10px;background:#f8f3ea;border-radius:12px}
+  .lfields{flex:1;display:flex;flex-direction:column;gap:6px;min-width:0}
+  .lrow input{width:100%;font:inherit;font-size:16px;padding:10px 12px;border:1.5px solid var(--line);border-radius:10px;background:#fff;color:var(--ink)}
+  .lrow input:focus{outline:none;border-color:var(--green)}
+  .lx{flex:none;width:38px;height:38px;border:0;border-radius:10px;background:#efe1e3;color:var(--red2);font-size:16px;font-weight:700;cursor:pointer}
+  .addlink{margin-top:2px;padding:12px;font-size:15px}
+  .lcards{display:flex;flex-direction:column;gap:8px;margin-top:10px}
+  .lcard{display:block;text-decoration:none;background:#fff;border:1.5px solid #cfe0d6;border-radius:12px;padding:11px 14px;color:var(--ink)}
+  .lcard .ln{font-weight:700;font-size:16px;line-height:1.3;word-break:break-word}
+  .lcard .lh{color:var(--green);font-size:13px;margin-top:3px}
   .spinbtn{font-size:20px;padding:18px;background:linear-gradient(135deg,#c9a24a,#a8323f);box-shadow:0 6px 16px rgba(168,50,63,.3)}
   .note + .note{margin-top:10px}
   .reveal .note{margin-bottom:6px}
@@ -233,6 +246,45 @@ $('scrim').addEventListener('click', e => { if (e.target.id === 'scrim' && !wind
 
 const pinField = () => `<input class="pin" id="pin" type="password" inputmode="numeric" pattern="[0-9]*" maxlength="4" autocomplete="off" placeholder="••••">`;
 const wishField = (v) => `<textarea class="wish" id="wish" maxlength="1500" placeholder="Example:&#10;- Target gift card&#10;- Size L hoodie&#10;- Anything coffee">${esc(v || '')}</textarea>`;
+// ---------- links ----------
+function hostOf(u) { try { return new URL(u).hostname.replace(/^www\./, ''); } catch { return 'link'; } }
+function linkRow(l) {
+  return `<div class="lrow">
+      <div class="lfields">
+        <input class="lurl" type="url" inputmode="url" autocomplete="off" placeholder="Paste a link (Amazon, Target…)" value="${esc(l?.url || '')}">
+        <input class="lnote" type="text" maxlength="200" placeholder="Note: size, color, which one…" value="${esc(l?.note || '')}">
+      </div>
+      <button type="button" class="lx" aria-label="Remove link">✕</button>
+    </div>`;
+}
+function linksEditor(links) {
+  const rows = (links && links.length ? links : [{}]).map(linkRow).join('');
+  return `<div class="lhead">🔗 Links <span>(optional)</span></div>
+    <p class="small" style="margin:0 0 8px">Found something online? Paste the link here and add a note.</p>
+    <div id="links">${rows}</div>
+    <button type="button" class="btn light addlink" id="addLink">+ Add another link</button>`;
+}
+function wireLinks() {
+  const box = $('links');
+  const wireRow = (row) => { row.querySelector('.lx').onclick = () => { if (box.children.length > 1) row.remove(); else row.querySelectorAll('input').forEach(i => i.value = ''); }; };
+  box.querySelectorAll('.lrow').forEach(wireRow);
+  $('addLink').onclick = () => {
+    if (box.children.length >= 25) return;
+    box.insertAdjacentHTML('beforeend', linkRow({}));
+    const row = box.lastElementChild; wireRow(row); row.querySelector('.lurl').focus();
+  };
+}
+function readLinks() {
+  return [...document.querySelectorAll('#links .lrow')]
+    .map(r => ({ url: r.querySelector('.lurl').value.trim(), note: r.querySelector('.lnote').value.trim() }))
+    .filter(l => l.url || l.note);
+}
+function linkCards(links) {
+  if (!links || !links.length) return '';
+  return `<div class="lcards">${links.map(l => `<a class="lcard" href="${esc(l.url)}" target="_blank" rel="noopener noreferrer nofollow">
+      <div class="ln">${esc(l.note || 'Open link')}</div><div class="lh">🔗 ${esc(hostOf(l.url))} ↗</div></a>`).join('')}</div>`;
+}
+
 function pinOnly(el) { el.addEventListener('input', () => { el.value = el.value.replace(/\D/g, '').slice(0, 4); }); }
 
 function openFor(i) {
@@ -277,19 +329,20 @@ function openSetup(name) {
     <div class="stepnum"><span>1</span> What would you like for Christmas?</div>
     <p class="small">Sizes, favorite colors, stores, hobbies, anything. Whoever gets your name will see this.</p>
     ${wishField('')}
+    ${linksEditor([])}
     <div class="stepnum" style="margin-top:18px"><span>2</span> Make up any 4 numbers</div>
     <p class="small">This is your PIN. You’ll use it to come back and see your person later.</p>
     ${pinField()}<div class="err" id="err"></div>
     <button class="btn" id="go">Save & continue</button>
     <button class="btn ghost" id="cancel">That’s not me</button>`);
-  pinOnly($('pin'));
+  pinOnly($('pin')); wireLinks();
   $('cancel').onclick = closeSheet;
   $('go').onclick = async () => {
-    const w = $('wish').value.trim(), p = $('pin').value;
-    if (!w) return $('err').textContent = 'Type at least one thing you’d like.';
+    const w = $('wish').value.trim(), p = $('pin').value, links = readLinks();
+    if (!w && !links.some(l => l.url)) return $('err').textContent = 'Type at least one thing you’d like (or add a link).';
     if (p.length !== 4) return $('err').textContent = 'Your PIN needs 4 numbers.';
     $('go').disabled = true;
-    const r = await me(name, p, 'setup', { wish: w });
+    const r = await me(name, p, 'setup', { wish: w, links });
     if (!r.ok) { $('err').textContent = r.message || 'Something went wrong.'; $('go').disabled = false; return; }
     panel(name, p, r, true);
   };
@@ -301,17 +354,22 @@ function mySection(name, pin, data, onSaved) {
         <div class="h">📝 Your wish list</div>
         <p>Whoever got your name sees this. You can change it anytime.</p>
         ${wishField(data.myWish)}
+        ${linksEditor(data.myLinks)}
         <button class="btn green" id="saveWish">Save my wish list</button>
         <div class="saved" id="saved"></div>
       </div>`,
     wire() {
+      wireLinks();
       $('wish').addEventListener('input', () => { $('saved').textContent = ''; });
       $('saveWish').onclick = async () => {
         const b = $('saveWish'); b.disabled = true; $('saved').textContent = 'Saving…';
-        const r = await me(name, pin, 'wish', { wish: $('wish').value });
+        const r = await me(name, pin, 'wish', { wish: $('wish').value, links: readLinks() });
         b.disabled = false;
         if (!r.ok) { $('saved').textContent = r.message || 'Couldn’t save. Try again.'; return; }
-        $('saved').textContent = r.myWish ? '✓ Saved!' : 'Saved (your list is empty).';
+        // show the cleaned-up links
+        const box = $('links'); box.innerHTML = (r.myLinks.length ? r.myLinks : [{}]).map(linkRow).join(''); wireLinks();
+        const skip = r.skippedLinks ? ` (${r.skippedLinks} link${r.skippedLinks === 1 ? ' wasn’t' : 's weren’t'} a real link and got skipped)` : '';
+        $('saved').textContent = (r.myWish || r.myLinks.length ? '✓ Saved!' : 'Saved (your list is empty).') + skip;
         if (onSaved) onSaved(r);
       };
     },
@@ -321,8 +379,8 @@ function mySection(name, pin, data, onSaved) {
 function panel(name, pin, data, firstTime) {
   const pinNote = firstTime ? `<div class="note">🔑 Your PIN is <b>${esc(pin)}</b>. Remember it (or screenshot this) so you can come back later.</div>` : '';
   if (!data.receiver) {
-    const can = !!data.myWish;
-    const mine = mySection(name, pin, data, r => { if (!!r.myWish !== can) panel(name, pin, r, firstTime); });
+    const can = !!data.myWish || data.myLinks.length > 0;
+    const mine = mySection(name, pin, data, r => { if ((!!r.myWish || r.myLinks.length > 0) !== can) panel(name, pin, r, firstTime); });
     openSheet(`<div class="reveal">
         <div class="gift">✅</div>
         <h3 style="margin-bottom:4px">You’re all set, ${esc(name)}!</h3>
@@ -347,8 +405,8 @@ function panel(name, pin, data, firstTime) {
     return;
   }
   const rcv = data.receiver;
-  const theirs = data.theirWish
-    ? `<div class="t">${esc(data.theirWish)}</div>`
+  const theirs = (data.theirWish || data.theirLinks.length)
+    ? `${data.theirWish ? `<div class="t">${esc(data.theirWish)}</div>` : ''}${linkCards(data.theirLinks)}`
     : `<div class="t none">${esc(rcv)} hasn’t added a wish list yet. It’ll show up here once they do. Tap your name again later to check.</div>`;
   const mine = mySection(name, pin, data);
   openSheet(`<div class="reveal">

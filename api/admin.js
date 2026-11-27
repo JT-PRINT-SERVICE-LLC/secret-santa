@@ -103,7 +103,7 @@ export default async function handler(req, res) {
         delete assign[b.name];
         await db('SET', K.assign(round), JSON.stringify(assign));
       });
-      await db('DEL', K.pin(round, b.name), K.fails(round, b.name), K.wish(round, b.name));
+      await db('DEL', K.pin(round, b.name), K.fails(round, b.name), K.wish(round, b.name), K.links(round, b.name));
       await log(req, 'Organizer', `Full reset of ${b.name} (PIN, wish list and spin cleared)`);
       return send(res, 200, { ok: true });
     }

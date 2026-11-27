@@ -1,6 +1,6 @@
 import {
   db, getJSON, K, send, body, hashSecret, checkSecret, handleErr, MAX_PIN_TRIES,
-  withLock, makeAllowed, pickReceiver, log,
+  withLock, makeAllowed, pickReceiver, log, cleanLinks, parseLinks, hasListFor,
 } from './_lib.js';
 
 const MAX_WISH = 1500;
@@ -23,24 +23,42 @@ export default async function handler(req, res) {
     const failKey = K.fails(round, name);
     const who = config.organizer || 'the organizer';
 
-    const panel = async () => {
+    // Links are only touched when the page sends them (older open pages don't)
+    const sentLinks = Array.isArray(b.links) ? cleanLinks(b.links) : null;
+    const saveLinks = async () => {
+      if (!sentLinks) return;
+      if (sentLinks.links.length) await db('SET', K.links(round, name), JSON.stringify(sentLinks.links));
+      else await db('DEL', K.links(round, name));
+    };
+    const linkNote = () => (sentLinks ? `, ${sentLinks.links.length} link${sentLinks.links.length === 1 ? '' : 's'}` : '');
+
+    const panel = async (extra = {}) => {
       const assign = (await getJSON(K.assign(round))) || {};
       const receiver = assign[name] || null;
-      const keys = [K.wish(round, name)];
-      if (receiver) keys.push(K.wish(round, receiver));
-      const [myWish, theirWish] = await db('MGET', ...keys);
-      return { receiver, myWish: myWish || '', theirWish: theirWish || '' };
+      const keys = [K.wish(round, name), K.links(round, name)];
+      if (receiver) keys.push(K.wish(round, receiver), K.links(round, receiver));
+      const [myWish, myLinks, theirWish, theirLinks] = await db('MGET', ...keys);
+      return {
+        receiver,
+        myWish: myWish || '', myLinks: parseLinks(myLinks),
+        theirWish: theirWish || '', theirLinks: parseLinks(theirLinks),
+        skippedLinks: sentLinks ? sentLinks.skipped : 0,
+        ...extra,
+      };
     };
 
     // First time: save wish list + PIN together
     if (action === 'setup') {
       const text = cleanWish(wish);
-      const existing = await db('GET', K.wish(round, name));
-      if (!text && !existing) return send(res, 400, { error: 'wish', message: 'Type at least one thing you’d like.' });
+      const [existingWish, existingLinks] = await db('MGET', K.wish(round, name), K.links(round, name));
+      const hasAny = text || (sentLinks && sentLinks.links.length) || existingWish || parseLinks(existingLinks).length;
+      if (!hasAny) return send(res, 400, { error: 'wish', message: 'Add at least one thing you’d like (or a link).' });
       const ok = await db('SET', pinKey, hashSecret(pin), 'NX');
       if (ok !== 'OK') { await log(req, name, 'Tried to set up, but this name was already set up'); return send(res, 409, { error: 'taken', message: `${name} is already set up. Tap the name and enter the PIN.` }); }
       if (text) await db('SET', K.wish(round, name), text);
-      await log(req, name, text ? `Set up: made PIN and saved wish list (${text.length} chars)` : 'Made a new PIN (kept old wish list)');
+      if (sentLinks && sentLinks.links.length) await saveLinks();
+      const fresh = text || (sentLinks && sentLinks.links.length);
+      await log(req, name, fresh ? `Set up: made PIN and saved wish list (${text.length} chars${linkNote()})` : 'Made a new PIN (kept old wish list)');
       return send(res, 200, await panel());
     }
 
@@ -64,18 +82,19 @@ export default async function handler(req, res) {
       const text = cleanWish(wish);
       if (text) await db('SET', K.wish(round, name), text);
       else await db('DEL', K.wish(round, name));
-      await log(req, name, text ? `Updated wish list (${text.length} chars)` : 'Cleared wish list (now empty)');
+      await saveLinks();
+      await log(req, name, `Updated wish list (${text.length} chars${linkNote()})`);
       return send(res, 200, await panel());
     }
 
     if (action === 'draw') {
-      const mine = await db('GET', K.wish(round, name));
-      if (!mine) { await log(req, name, 'Tried to spin without a wish list (blocked)'); return send(res, 400, { error: 'nowish', message: 'Save your wish list first, then you can spin.' }); }
+      if (!(await hasListFor(round, name))) { await log(req, name, 'Tried to spin without a wish list (blocked)'); return send(res, 400, { error: 'nowish', message: 'Save your wish list first, then you can spin.' }); }
       const result = await withLock(round, async () => {
         const assign = (await getJSON(K.assign(round))) || {};
         if (assign[name]) return { already: true };
-        const wishes = await db('MGET', ...config.names.map(n => K.wish(round, n)));
-        const hasWish = new Set(config.names.filter((n, i) => !!wishes[i]));
+        const vals = await db('MGET', ...config.names.map(n => K.wish(round, n)), ...config.names.map(n => K.links(round, n)));
+        const N = config.names.length;
+        const hasWish = new Set(config.names.filter((n, i) => !!vals[i] || parseLinks(vals[N + i]).length > 0));
         const r = pickReceiver(name, config.names, assign, makeAllowed(config.groups), hasWish);
         if (!r) return { stuck: true };
         assign[name] = r;
@@ -84,7 +103,7 @@ export default async function handler(req, res) {
       });
       await log(req, name, result.stuck ? 'SPIN FAILED: no valid person left (stuck)' : result.already ? 'Tapped spin again (already had a person)' : 'Spun the wheel and got their person');
       if (result.stuck) return send(res, 409, { error: 'stuck', message: `Something’s off with the drawing. Text ${who}.` });
-      return send(res, 200, { ...(await panel()), justDrew: !result.already });
+      return send(res, 200, await panel({ justDrew: !result.already }));
     }
 
     // action === 'login'
