@@ -189,7 +189,7 @@ function render() {
   if (S.title) { $('title').textContent = S.title; document.title = S.title; }
   const meta = [];
   if (S.price) meta.push(`<span class="pill">💵 ${esc(S.price)}</span>`);
-  if (S.date) meta.push(`<span class="pill">📅 ${esc(S.date)}</span>`);
+  if (S.date) meta.push(`<span class="pill">🎉 ${esc(S.date)}</span>`);
   $('meta').innerHTML = meta.join('');
 
   if (!S.ready) {
