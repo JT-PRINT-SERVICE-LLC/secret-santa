@@ -146,6 +146,7 @@
   .lcard{display:block;text-decoration:none;background:#fff;border:1.5px solid #cfe0d6;border-radius:12px;padding:11px 14px;color:var(--ink)}
   .lcard .ln{font-weight:700;font-size:16px;line-height:1.3;word-break:break-word}
   .lcard .lh{color:var(--green);font-size:13px;margin-top:3px}
+  a.inl{color:var(--green);font-weight:600;word-break:break-all}
   .spinbtn{font-size:20px;padding:18px;background:linear-gradient(135deg,#c9a24a,#a8323f);box-shadow:0 6px 16px rgba(168,50,63,.3)}
   .note + .note{margin-top:10px}
   .reveal .note{margin-bottom:6px}
@@ -279,6 +280,13 @@ function readLinks() {
     .map(r => ({ url: r.querySelector('.lurl').value.trim(), note: r.querySelector('.lnote').value.trim() }))
     .filter(l => l.url || l.note);
 }
+// Make links typed into the wish list text tappable (text is escaped first)
+function linkify(text) {
+  return esc(text).replace(/https?:\/\/[^\s<]+/gi, m => {
+    const clean = m.replace(/[).,!?]+$/, ''), tail = m.slice(clean.length);
+    return `<a href="${clean}" target="_blank" rel="noopener noreferrer nofollow" class="inl">${clean}</a>${tail}`;
+  });
+}
 function linkCards(links) {
   if (!links || !links.length) return '';
   return `<div class="lcards">${links.map(l => `<a class="lcard" href="${esc(l.url)}" target="_blank" rel="noopener noreferrer nofollow">
@@ -406,7 +414,7 @@ function panel(name, pin, data, firstTime) {
   }
   const rcv = data.receiver;
   const theirs = (data.theirWish || data.theirLinks.length)
-    ? `${data.theirWish ? `<div class="t">${esc(data.theirWish)}</div>` : ''}${linkCards(data.theirLinks)}`
+    ? `${data.theirWish ? `<div class="t">${linkify(data.theirWish)}</div>` : ''}${linkCards(data.theirLinks)}`
     : `<div class="t none">${esc(rcv)} hasn’t added a wish list yet. It’ll show up here once they do. Tap your name again later to check.</div>`;
   const mine = mySection(name, pin, data);
   openSheet(`<div class="reveal">
