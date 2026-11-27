@@ -35,6 +35,7 @@
   .stat{font-size:15px;margin-bottom:10px}
   details summary{cursor:pointer;font-weight:700;font-size:16px;padding:4px 0}
   .hide{display:none}
+  .vw{font-size:13px;color:var(--green);font-weight:600}
   .log{margin-top:12px;max-height:60vh;overflow-y:auto;border:1px solid var(--line);border-radius:10px}
   .le{padding:9px 12px;border-bottom:1px solid var(--line);font-size:14px;line-height:1.35}
   .le:last-child{border-bottom:0}
@@ -130,11 +131,12 @@ function showMain(d) {
     return;
   }
   const done = d.drawn.filter(Boolean).length, total = c.names.length, wl = d.wish.filter(Boolean).length;
-  const rows = c.names.map((n, i) => `<tr><td><b>${esc(n)}</b></td>
+  const rows = c.names.map((n, i) => `<tr><td><b>${esc(n)}</b>${d.wish[i] ? `<br><a href="#" class="vw" data-vw="${esc(n)}">View list</a>` : ''}</td>
       <td>${d.wish[i] ? '<span class="ok">✓</span>' : '<span class="no">–</span>'}</td>
       <td>${d.drawn[i] ? '<span class="ok">✓</span>' : '<span class="no">–</span>'}</td>
       <td style="text-align:right;white-space:nowrap">${d.setup[i] ? `<button class="btn light small" data-pin="${esc(n)}">New PIN</button> <button class="btn light small" data-reset="${esc(n)}">Reset</button>` : ''}</td></tr>`).join('');
   $('app').innerHTML = `
+    <div id="wishView"></div>
     <div class="card"><h2>Progress</h2>
       <div class="stat"><b>${done}</b> of ${total} have spun · <b>${wl}</b> of ${total} wish lists in</div>
       <table><tr><th>Name</th><th>List</th><th>Spun</th><th></th></tr>${rows}</table>
@@ -162,6 +164,18 @@ function showMain(d) {
     if (!r.ok) return msg('rm', r.message);
     const t = await api('load'); if (t.ok) showMain(t);
     msg('rm', done(n), true);
+  });
+  document.querySelectorAll('[data-vw]').forEach(a => a.onclick = async (e) => {
+    e.preventDefault();
+    const n = a.dataset.vw, r = await api('viewwish', { name: n });
+    if (!r.ok) return msg('rm', r.message || 'Couldn’t load it.');
+    const host = u => { try { return new URL(u).hostname.replace(/^www\./, ''); } catch { return 'link'; } };
+    $('wishView').innerHTML = `<div class="card"><h2>${esc(n)}’s wish list</h2>
+      ${r.wish ? `<div style="white-space:pre-wrap;font-size:16px;line-height:1.45">${esc(r.wish)}</div>` : '<p class="sub">No text.</p>'}
+      ${r.links.length ? `<div style="margin-top:12px">${r.links.map(l => `<a href="${esc(l.url)}" target="_blank" rel="noopener noreferrer nofollow" style="display:block;border:1px solid var(--line);border-radius:10px;padding:10px 12px;margin-bottom:8px;color:var(--ink);text-decoration:none"><b>${esc(l.note || 'Link')}</b><br><span style="color:var(--green);font-size:13px">🔗 ${esc(host(l.url))} ↗</span></a>`).join('')}</div>` : '<p class="sub">No links.</p>'}
+      <button class="btn light" id="closeWV">Close</button></div>`;
+    $('closeWV').onclick = () => { $('wishView').innerHTML = ''; };
+    $('wishView').scrollIntoView({ behavior: 'smooth' });
   });
   wireAct('pin', 'newpin', 'New PIN', n => `${n} can tap their name and make a new PIN. Their list and person are kept.`);
   wireAct('reset', 'reset', 'Reset', n => `${n} was fully reset and can start fresh.`);

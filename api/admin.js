@@ -1,6 +1,6 @@
 import {
   db, getJSON, K, send, body, hashSecret, checkSecret, handleErr,
-  statusOf, withLock, makeAllowed, canFinish, log, readLog,
+  statusOf, withLock, makeAllowed, canFinish, log, readLog, parseLinks,
 } from './_lib.js';
 
 const clean = (s, max = 80) => String(s ?? '').replace(/\s+/g, ' ').trim().slice(0, max);
@@ -50,6 +50,14 @@ export default async function handler(req, res) {
     }
 
     if (b.action === 'log') return send(res, 200, { log: await readLog(500) });
+
+    // Read-only look at one person's wish list (never shows who they got)
+    if (b.action === 'viewwish') {
+      if (!config || !config.names.includes(b.name)) return send(res, 404, { error: 'name', message: 'Name not found.' });
+      const [w, l] = await db('MGET', K.wish(round, b.name), K.links(round, b.name));
+      await log(req, 'Organizer', `Viewed ${b.name}'s wish list`);
+      return send(res, 200, { wish: w || '', links: parseLinks(l) });
+    }
 
     // Start (or restart) with a list of names. Wipes all PINs, wish lists and draws.
     if (b.action === 'open') {
