@@ -109,6 +109,12 @@
   textarea.wish:focus{outline:none;border-color:var(--green)}
   .btn.green{background:var(--green)}
   .saved{color:var(--green);font-weight:600;text-align:center;min-height:20px;margin-top:8px;font-size:15px}
+  .wheel-wrap{position:relative;width:min(86vw,340px);margin:14px auto 6px}
+  .wheel-svg{width:100%;height:auto;display:block;filter:drop-shadow(0 8px 18px rgba(60,20,20,.3))}
+  .pointer{position:absolute;left:50%;top:-6px;transform:translateX(-50%);width:0;height:0;border-left:16px solid transparent;border-right:16px solid transparent;border-top:30px solid #c9a24a;z-index:3;filter:drop-shadow(0 2px 2px rgba(0,0,0,.35))}
+  .wheel-cap{font-size:20px;font-weight:700;color:var(--red);min-height:30px;margin-top:8px}
+  .confetti{position:fixed;top:-12px;width:9px;height:14px;border-radius:2px;z-index:50;pointer-events:none;animation:cf linear forwards}
+  @keyframes cf{to{top:105vh;transform:rotate(720deg) translateX(40px)}}
   .spin{width:44px;height:44px;border:4px solid #eadfcd;border-top-color:var(--red);border-radius:50%;margin:24px auto;animation:r .8s linear infinite}
   @keyframes r{to{transform:rotate(360deg)}}
 </style>
@@ -224,7 +230,7 @@ function openFor(i) {
 
 async function submit(name, pin, mode) {
   $('go').disabled = true;
-  const started = Date.now();
+  if (mode === 'claim') audioInit();
   let r, j;
   try {
     r = await fetch('/api/claim', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ name, pin, mode }) });
@@ -239,11 +245,10 @@ async function submit(name, pin, mode) {
   }
 
   if (mode === 'claim') {
-    openSheet(`<div class="reveal"><p style="margin-top:8px">Drawing a name…</p><div class="spin"></div></div>`);
-    const wait = Math.max(0, 1400 - (Date.now() - started));
-    await new Promise(res => setTimeout(res, wait));
+    await spinWheel(name, j.receiver);
   }
   showResult(name, pin, j, mode === 'claim');
+  if (mode === 'claim') confetti();
 }
 
 function showResult(name, pin, j, firstTime) {
@@ -278,6 +283,95 @@ function showResult(name, pin, j, firstTime) {
     } catch { $('saved').textContent = 'No connection. Try again.'; }
     b.disabled = false;
   };
+}
+
+// ---------- prize wheel ----------
+let AC = null;
+function audioInit() { try { AC = AC || new (window.AudioContext || window.webkitAudioContext)(); AC.resume && AC.resume(); } catch {} }
+function tick(big) {
+  if (!AC) return;
+  try {
+    const o = AC.createOscillator(), g = AC.createGain();
+    o.type = 'square'; o.frequency.value = big ? 520 : 1400;
+    g.gain.setValueAtTime(big ? 0.18 : 0.06, AC.currentTime);
+    g.gain.exponentialRampToValueAtTime(0.0001, AC.currentTime + (big ? 0.35 : 0.03));
+    o.connect(g); g.connect(AC.destination); o.start(); o.stop(AC.currentTime + (big ? 0.36 : 0.035));
+  } catch {}
+}
+
+function wheelSVG(names) {
+  const n = names.length, cx = 160, cy = 160, r = 150, a = 360 / n;
+  const pt = (deg, rad) => { const t = deg * Math.PI / 180; return [cx + rad * Math.sin(t), cy - rad * Math.cos(t)]; };
+  const cols = ['#a8323f', '#1f4d3a', '#c9a24a'];
+  const fs = n <= 6 ? 19 : n <= 10 ? 16 : n <= 14 ? 13 : 11;
+  let segs = '';
+  names.forEach((nm, i) => {
+    let col = cols[i % 2];
+    if (n % 2 === 1 && i === n - 1) col = cols[2];
+    const [x1, y1] = pt(i * a, r), [x2, y2] = pt((i + 1) * a, r);
+    const large = a > 180 ? 1 : 0;
+    const label = nm.length > 11 ? nm.slice(0, 10) + '…' : nm;
+    const mid = i * a + a / 2;
+    segs += `<path d="M${cx},${cy} L${x1.toFixed(2)},${y1.toFixed(2)} A${r},${r} 0 ${large} 1 ${x2.toFixed(2)},${y2.toFixed(2)} Z" fill="${col}" stroke="#fffdf8" stroke-width="2"/>`;
+    segs += `<g transform="rotate(${mid} ${cx} ${cy})"><text x="${cx}" y="${cy - r * 0.56}" transform="rotate(-90 ${cx} ${cy - r * 0.56})" text-anchor="middle" dominant-baseline="middle" fill="#fff" font-weight="700" font-size="${fs}" font-family="-apple-system,Segoe UI,Roboto,Arial,sans-serif">${esc(label)}</text></g>`;
+  });
+  let dots = '';
+  for (let i = 0; i < n * 2; i++) { const [x, y] = pt(i * (180 / n), r + 6); dots += `<circle cx="${x.toFixed(1)}" cy="${y.toFixed(1)}" r="3" fill="#ffe9a8"/>`; }
+  return `<svg viewBox="-10 -10 340 340" class="wheel-svg">
+      <circle cx="${cx}" cy="${cy}" r="${r + 10}" fill="#5c1520"/>${dots}
+      <g id="wheelRot">${segs}</g>
+      <circle cx="${cx}" cy="${cy}" r="30" fill="#fffdf8" stroke="#c9a24a" stroke-width="5"/>
+      <text x="${cx}" y="${cy + 2}" text-anchor="middle" dominant-baseline="middle" font-size="28">🎄</text>
+    </svg>`;
+}
+
+function spinWheel(self, receiver) {
+  return new Promise(resolve => {
+    let names = S.names.filter(n => n !== self);
+    if (!names.includes(receiver)) names.push(receiver);
+    // shuffle display order so the wheel looks random every time
+    for (let i = names.length - 1; i > 0; i--) { const k = Math.floor(Math.random() * (i + 1)); [names[i], names[k]] = [names[k], names[i]]; }
+    const n = names.length, a = 360 / n, idx = names.indexOf(receiver);
+    openSheet(`<div class="reveal">
+        <div class="for" style="margin-top:4px">${esc(self)}, spinning for your person…</div>
+        <div class="wheel-wrap"><div class="pointer"></div>${wheelSVG(names)}</div>
+        <div class="wheel-cap" id="wcap">🎰 Good luck!</div>
+      </div>`);
+    const g = document.getElementById('wheelRot');
+    const jitter = (Math.random() - 0.5) * a * 0.6;
+    const target = 360 * 7 - (idx * a + a / 2) + jitter;
+    const dur = 5200, t0 = performance.now();
+    const ease = t => 1 - Math.pow(1 - t, 4);
+    let lastSeg = 0;
+    const frame = now => {
+      const t = Math.min(1, (now - t0) / dur);
+      const ang = target * ease(t);
+      g.setAttribute('transform', `rotate(${ang.toFixed(2)} 160 160)`);
+      const seg = Math.floor((ang + a / 2) / a);
+      if (seg !== lastSeg) { lastSeg = seg; tick(false); }
+      if (t < 1) return requestAnimationFrame(frame);
+      tick(true);
+      try { navigator.vibrate && navigator.vibrate([80, 50, 120]); } catch {}
+      document.getElementById('wcap').innerHTML = `🎉 <b>${esc(receiver)}</b>!`;
+      setTimeout(resolve, 1300);
+    };
+    requestAnimationFrame(frame);
+  });
+}
+
+function confetti() {
+  const cols = ['#a8323f', '#1f4d3a', '#c9a24a', '#ffffff', '#e05a6a'];
+  for (let i = 0; i < 70; i++) {
+    const c = document.createElement('div');
+    c.className = 'confetti';
+    c.style.left = Math.random() * 100 + 'vw';
+    c.style.background = cols[i % cols.length];
+    c.style.animationDuration = (1.8 + Math.random() * 1.6) + 's';
+    c.style.animationDelay = (Math.random() * 0.4) + 's';
+    c.style.transform = `rotate(${Math.random() * 360}deg)`;
+    document.body.appendChild(c);
+    setTimeout(() => c.remove(), 4200);
+  }
 }
 
 for (let i = 0; i < 18; i++) {
