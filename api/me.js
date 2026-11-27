@@ -1,6 +1,6 @@
 import {
   db, getJSON, K, send, body, hashSecret, checkSecret, handleErr, MAX_PIN_TRIES,
-  withLock, makeAllowed, pickReceiver, log, cleanLinks, parseLinks, hasListFor,
+  withLock, makeAllowed, pickReceiver, log, cleanLinks, parseLinks, hasListFor, mergeTextLinks,
 } from './_lib.js';
 
 const MAX_WISH = 1500;
@@ -30,6 +30,18 @@ export default async function handler(req, res) {
       if (sentLinks.links.length) await db('SET', K.links(round, name), JSON.stringify(sentLinks.links));
       else await db('DEL', K.links(round, name));
     };
+    // After a save: copy any links typed in the wish list text into the Links section.
+    // The text itself is never changed. If anything goes wrong here, the save already happened.
+    const copyTextLinks = async (text) => {
+      try {
+        if (!text || !/https?:\/\//i.test(text)) return;
+        const current = parseLinks(await db('GET', K.links(round, name)));
+        const { links, added } = mergeTextLinks(current, text);
+        if (!added) return;
+        await db('SET', K.links(round, name), JSON.stringify(links));
+        await log(req, name, `Auto-copied ${added} link${added === 1 ? '' : 's'} from wish list text into Links`);
+      } catch (e) { await log(req, name, 'Auto-copy of links skipped (error, nothing changed)'); }
+    };
     const linkNote = () => (sentLinks ? `, ${sentLinks.links.length} link${sentLinks.links.length === 1 ? '' : 's'}` : '');
 
     const panel = async (extra = {}) => {
@@ -57,6 +69,7 @@ export default async function handler(req, res) {
       if (ok !== 'OK') { await log(req, name, 'Tried to set up, but this name was already set up'); return send(res, 409, { error: 'taken', message: `${name} is already set up. Tap the name and enter the PIN.` }); }
       if (text) await db('SET', K.wish(round, name), text);
       if (sentLinks && sentLinks.links.length) await saveLinks();
+      await copyTextLinks(text);
       const fresh = text || (sentLinks && sentLinks.links.length);
       await log(req, name, fresh ? `Set up: made PIN and saved wish list (${text.length} chars${linkNote()})` : 'Made a new PIN (kept old wish list)');
       return send(res, 200, await panel());
@@ -84,6 +97,7 @@ export default async function handler(req, res) {
       else await db('DEL', K.wish(round, name));
       await saveLinks();
       await log(req, name, `Updated wish list (${text.length} chars${linkNote()})`);
+      await copyTextLinks(text);
       return send(res, 200, await panel());
     }
 

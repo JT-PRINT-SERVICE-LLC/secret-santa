@@ -178,6 +178,50 @@ export function cleanLinks(arr) {
   }
   return { links: out, skipped };
 }
+// Links typed into the wish list text (same rules as the page uses to display them)
+export // Display-only: pull links typed into wish list text out into link cards. Never saved.
+function splitWishLinks(text) {
+  const URL_G = /https?:\/\/[^\s<>"]+/gi;
+  const lines = String(text || '').replace(/\r/g, '').split('\n');
+  const keep = [], links = [];
+  const tidy = s => s.replace(/^[\s\-–—•*·>]+/, '').replace(/[\s\-–—:|·,(\[]+$/, '').trim();
+  const unparen = s => { const t = s.trim(); const m = t.match(/^\((.*)\)$/); return (m ? m[1] : t).trim(); };
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i];
+    const found = line.match(URL_G) || [];
+    if (found.length !== 1) { keep.push(line); continue; }   // no link, or several on one line: leave as text
+    const raw = found[0];
+    const url = raw.replace(/[).,!?]+$/, '');
+    try { const u = new URL(url); if (!/^https?:$/.test(u.protocol)) throw 0; } catch { keep.push(line); continue; }
+    const at = line.indexOf(raw);
+    const before = tidy(line.slice(0, at));
+    let after = line.slice(at + url.length).trim();
+    if (after.startsWith(')') && !after.includes('(')) after = after.slice(1).trim();
+    const extras = [];
+    if (tidy(after)) extras.push(unparen(tidy(after)));
+    const next = lines[i + 1];
+    if (next !== undefined && /^\s*\([^()]*\)\s*$/.test(next) && !URL_G.test(next)) { extras.push(unparen(next)); i++; }
+    URL_G.lastIndex = 0;
+    links.push({ url, note: [before, ...extras].filter(Boolean).join(' · ') });
+  }
+  return { text: keep.join('\n').replace(/\n{3,}/g, '\n\n').trim(), links };
+}
+
+const linkKey = (u) => { try { const x = new URL(u); return (x.host.replace(/^www\./, '') + x.pathname.replace(/\/+$/, '') + x.search).toLowerCase(); } catch { return String(u).toLowerCase(); } };
+// Adds links found in the text to the saved links. Never removes or edits existing ones.
+export function mergeTextLinks(saved, text) {
+  const out = [...(saved || [])];
+  const seen = new Set(out.map(l => linkKey(l.url)));
+  let added = 0;
+  for (const l of splitWishLinks(text).links) {
+    if (out.length >= MAX_LINKS) break;
+    const k = linkKey(l.url);
+    if (seen.has(k)) continue;
+    seen.add(k); out.push({ url: l.url, note: String(l.note || '').slice(0, 200) }); added++;
+  }
+  return { links: out, added };
+}
+
 export async function hasListFor(round, name) {
   const [w, l] = await db('MGET', K.wish(round, name), K.links(round, name));
   return !!w || parseLinks(l).length > 0;
