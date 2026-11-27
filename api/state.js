@@ -17,5 +17,5 @@ export default async function handler(req, res) {
       wish: st.wish,
       drawn: st.drawn,
     });
-  } catch (e) { handleErr(res, e); }
+  } catch (e) { return handleErr(res, e, req, ''); }
 }

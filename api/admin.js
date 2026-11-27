@@ -1,6 +1,6 @@
 import {
   db, getJSON, K, send, body, hashSecret, checkSecret, handleErr,
-  statusOf, withLock, makeAllowed, canFinish,
+  statusOf, withLock, makeAllowed, canFinish, log, readLog,
 } from './_lib.js';
 
 const clean = (s, max = 80) => String(s ?? '').replace(/\s+/g, ' ').trim().slice(0, max);
@@ -18,6 +18,7 @@ export default async function handler(req, res) {
       if (String(b.password || '').length < 6) return send(res, 400, { error: 'short', message: 'Use at least 6 characters.' });
       const ok = await db('SET', K.admin, hashSecret(b.password), 'NX');
       if (ok !== 'OK') return send(res, 409, { error: 'exists', message: 'Password already set. Log in instead.' });
+      await log(req, 'Organizer', 'Created organizer password');
       return send(res, 200, { ok: true });
     }
 
@@ -26,6 +27,7 @@ export default async function handler(req, res) {
     if (!stored || !checkSecret(b.password || '', stored)) {
       await db('INCR', K.adminFails);
       await db('EXPIRE', K.adminFails, 900);
+      await log(req, 'Organizer', 'Wrong organizer password attempt');
       return send(res, 401, { error: 'auth', message: 'Wrong password.' });
     }
     if (fails) await db('DEL', K.adminFails);
@@ -43,8 +45,11 @@ export default async function handler(req, res) {
       if (!config) return send(res, 409, { error: 'none', message: 'Set up the names first.' });
       const next = { ...config, title: clean(b.title) || config.title, organizer: clean(b.organizer, 40), price: clean(b.price, 40), date: clean(b.date, 60) };
       await db('SET', K.config, JSON.stringify(next));
+      await log(req, 'Organizer', `Edited details: "${next.title}", price "${next.price}", party "${next.date}"`);
       return send(res, 200, { ok: true });
     }
+
+    if (b.action === 'log') return send(res, 200, { log: await readLog(500) });
 
     // Start (or restart) with a list of names. Wipes all PINs, wish lists and draws.
     if (b.action === 'open') {
@@ -76,6 +81,7 @@ export default async function handler(req, res) {
         date: clean(b.date, 60),
         names, groups,
       }));
+      await log(req, 'Organizer', `STARTED${config ? ' OVER' : ''}: ${names.length} names (${names.join(', ')})${groups.length ? '; couples: ' + groups.map(g => g.join(' + ')).join(', ') : ''}. All PINs, wish lists and spins cleared.`);
       return send(res, 200, { ok: true });
     }
 
@@ -86,6 +92,7 @@ export default async function handler(req, res) {
     // Forgot PIN / locked out: keeps their wish list and their person
     if (b.action === 'newpin') {
       await db('DEL', K.pin(round, b.name), K.fails(round, b.name));
+      await log(req, 'Organizer', `New PIN for ${b.name} (kept wish list and person)`);
       return send(res, 200, { ok: true });
     }
 
@@ -97,15 +104,17 @@ export default async function handler(req, res) {
         await db('SET', K.assign(round), JSON.stringify(assign));
       });
       await db('DEL', K.pin(round, b.name), K.fails(round, b.name), K.wish(round, b.name));
+      await log(req, 'Organizer', `Full reset of ${b.name} (PIN, wish list and spin cleared)`);
       return send(res, 200, { ok: true });
     }
 
     if (b.action === 'reveal') {
       if (!config) return send(res, 409, { error: 'none', message: 'Nothing set up yet.' });
       const assign = (await getJSON(K.assign(round))) || {};
+      await log(req, 'Organizer', 'Opened backup matches');
       return send(res, 200, { pairs: config.names.map(n => [n, assign[n] || null]) });
     }
 
     return send(res, 400, { error: 'action' });
-  } catch (e) { handleErr(res, e); }
+  } catch (e) { return handleErr(res, e, req, 'Organizer'); }
 }

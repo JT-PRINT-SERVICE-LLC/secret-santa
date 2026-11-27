@@ -35,6 +35,11 @@
   .stat{font-size:15px;margin-bottom:10px}
   details summary{cursor:pointer;font-weight:700;font-size:16px;padding:4px 0}
   .hide{display:none}
+  .log{margin-top:12px;max-height:60vh;overflow-y:auto;border:1px solid var(--line);border-radius:10px}
+  .le{padding:9px 12px;border-bottom:1px solid var(--line);font-size:14px;line-height:1.35}
+  .le:last-child{border-bottom:0}
+  .le .lt{font-size:12px;color:var(--muted);margin-bottom:2px}
+  .le.warn{background:#fbeef0}
 </style>
 </head>
 <body>
@@ -142,6 +147,9 @@ function showMain(d) {
     <div class="card"><details><summary>Change names / start over</summary>
       <p class="sub">This wipes everything: every PIN, wish list and spin. Use it after testing, or if the names change after people already started.</p>
       ${drawForm(c)}<button class="btn" id="redraw">Start over with these names</button><div class="msg" id="m"></div></details></div>
+    <div class="card"><details id="logbox"><summary>Activity log</summary>
+      <p class="sub">Everything people do on the site, newest first. Doesn’t show who got who.</p>
+      <button class="btn light" id="loadLog">Load / refresh log</button><div id="logList"></div></details></div>
     <div class="card"><details id="bk"><summary>Backup: who got who</summary>
       <p class="sub">Only for fixing problems.</p>
       <button class="btn light" id="reveal">Show matches</button><div id="pairs"></div></details></div>`;
@@ -157,6 +165,18 @@ function showMain(d) {
   });
   wireAct('pin', 'newpin', 'New PIN', n => `${n} can tap their name and make a new PIN. Their list and person are kept.`);
   wireAct('reset', 'reset', 'Reset', n => `${n} was fully reset and can start fresh.`);
+  const showLog = async () => {
+    $('logList').innerHTML = '<p class="sub">Loading…</p>';
+    const r = await api('log');
+    if (!r.ok) { $('logList').innerHTML = `<p class="sub">${esc(r.message || 'Couldn’t load the log.')}</p>`; return; }
+    if (!r.log.length) { $('logList').innerHTML = '<p class="sub">Nothing yet.</p>'; return; }
+    const fmt = t => new Date(t).toLocaleString([], { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit', second: '2-digit' });
+    $('logList').innerHTML = `<div class="log">${r.log.map(e => `<div class="le ${/ERROR|FAILED|LOCKED|Wrong/.test(e.what) ? 'warn' : ''}">
+        <div class="lt">${esc(fmt(e.t))}${e.dev ? ' · ' + esc(e.dev) : ''}</div>
+        <div><b>${esc(e.who || 'Someone')}</b>: ${esc(e.what)}</div></div>`).join('')}</div>`;
+  };
+  $('loadLog').onclick = showLog;
+  $('logbox').addEventListener('toggle', () => { if ($('logbox').open && !$('logList').innerHTML) showLog(); });
   $('saveDetails').onclick = async () => {
     const r = await api('details', details());
     msg('dm', r.ok ? 'Saved.' : r.message, r.ok);

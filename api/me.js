@@ -1,6 +1,6 @@
 import {
   db, getJSON, K, send, body, hashSecret, checkSecret, handleErr, MAX_PIN_TRIES,
-  withLock, makeAllowed, pickReceiver,
+  withLock, makeAllowed, pickReceiver, log,
 } from './_lib.js';
 
 const MAX_WISH = 1500;
@@ -8,8 +8,10 @@ const cleanWish = (w) => String(w ?? '').replace(/\r/g, '').slice(0, MAX_WISH).t
 
 export default async function handler(req, res) {
   if (req.method !== 'POST') return send(res, 405, { error: 'method' });
+  let name = '';
   try {
-    const { name, pin, action, wish } = body(req);
+    const b = body(req); name = String(b.name || '').slice(0, 40);
+    const { pin, action, wish } = b;
     if (!/^\d{4}$/.test(String(pin || ''))) return send(res, 400, { error: 'pin', message: 'The PIN has to be 4 numbers.' });
 
     const config = await getJSON(K.config);
@@ -36,8 +38,9 @@ export default async function handler(req, res) {
       const existing = await db('GET', K.wish(round, name));
       if (!text && !existing) return send(res, 400, { error: 'wish', message: 'Type at least one thing you’d like.' });
       const ok = await db('SET', pinKey, hashSecret(pin), 'NX');
-      if (ok !== 'OK') return send(res, 409, { error: 'taken', message: `${name} is already set up. Tap the name and enter the PIN.` });
+      if (ok !== 'OK') { await log(req, name, 'Tried to set up, but this name was already set up'); return send(res, 409, { error: 'taken', message: `${name} is already set up. Tap the name and enter the PIN.` }); }
       if (text) await db('SET', K.wish(round, name), text);
+      await log(req, name, text ? `Set up: made PIN and saved wish list (${text.length} chars)` : 'Made a new PIN (kept old wish list)');
       return send(res, 200, await panel());
     }
 
@@ -45,10 +48,11 @@ export default async function handler(req, res) {
     const stored = await db('GET', pinKey);
     if (!stored) return send(res, 409, { error: 'nopin', message: 'This name isn’t set up yet.' });
     const fails = Number((await db('GET', failKey)) || 0);
-    if (fails >= MAX_PIN_TRIES) return send(res, 423, { error: 'locked', message: `Too many wrong PINs. Text ${who} to unlock it.` });
+    if (fails >= MAX_PIN_TRIES) { await log(req, name, 'Blocked: locked out from too many wrong PINs'); return send(res, 423, { error: 'locked', message: `Too many wrong PINs. Text ${who} to unlock it.` }); }
     if (!checkSecret(pin, stored)) {
       const n = await db('INCR', failKey);
       const left = Math.max(0, MAX_PIN_TRIES - n);
+      await log(req, name, `Wrong PIN (${left} tries left)${left ? '' : ' - now LOCKED'}`);
       return send(res, 401, {
         error: 'wrongpin',
         message: left ? `That PIN isn’t right. ${left} ${left === 1 ? 'try' : 'tries'} left.` : `Too many wrong PINs. Text ${who} to unlock it.`,
@@ -60,12 +64,13 @@ export default async function handler(req, res) {
       const text = cleanWish(wish);
       if (text) await db('SET', K.wish(round, name), text);
       else await db('DEL', K.wish(round, name));
+      await log(req, name, text ? `Updated wish list (${text.length} chars)` : 'Cleared wish list (now empty)');
       return send(res, 200, await panel());
     }
 
     if (action === 'draw') {
       const mine = await db('GET', K.wish(round, name));
-      if (!mine) return send(res, 400, { error: 'nowish', message: 'Save your wish list first, then you can spin.' });
+      if (!mine) { await log(req, name, 'Tried to spin without a wish list (blocked)'); return send(res, 400, { error: 'nowish', message: 'Save your wish list first, then you can spin.' }); }
       const result = await withLock(round, async () => {
         const assign = (await getJSON(K.assign(round))) || {};
         if (assign[name]) return { already: true };
@@ -77,11 +82,13 @@ export default async function handler(req, res) {
         await db('SET', K.assign(round), JSON.stringify(assign));
         return { ok: true };
       });
+      await log(req, name, result.stuck ? 'SPIN FAILED: no valid person left (stuck)' : result.already ? 'Tapped spin again (already had a person)' : 'Spun the wheel and got their person');
       if (result.stuck) return send(res, 409, { error: 'stuck', message: `Something’s off with the drawing. Text ${who}.` });
       return send(res, 200, { ...(await panel()), justDrew: !result.already });
     }
 
     // action === 'login'
+    await log(req, name, 'Logged in with PIN');
     return send(res, 200, await panel());
-  } catch (e) { handleErr(res, e); }
+  } catch (e) { return handleErr(res, e, req, name); }
 }

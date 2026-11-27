@@ -24,6 +24,7 @@ export const K = {
   wish: (r, n) => `${P}wish:${r}:${enc(n)}`,
   assign: (r) => `${P}assign:${r}`,
   lock: (r) => `${P}lock:${r}`,
+  log: P + 'log',
 };
 
 // ---------- database (Upstash Redis REST) ----------
@@ -37,6 +38,9 @@ function mock(cmd) {
     case 'INCR': { const v = Number(mem.get(a[0]) || 0) + 1; mem.set(a[0], String(v)); return v; }
     case 'EXPIRE': return 1;
     case 'MGET': return a.map(k => (mem.has(k) ? mem.get(k) : null));
+    case 'LPUSH': { const l = JSON.parse(mem.get(a[0]) || '[]'); l.unshift(...a.slice(1).reverse()); mem.set(a[0], JSON.stringify(l)); return l.length; }
+    case 'LTRIM': { const l = JSON.parse(mem.get(a[0]) || '[]'); mem.set(a[0], JSON.stringify(l.slice(Number(a[1]), Number(a[2]) + 1))); return 'OK'; }
+    case 'LRANGE': { const l = JSON.parse(mem.get(a[0]) || '[]'); return l.slice(Number(a[1]), Number(a[2]) + 1); }
     default: throw new Error('mock: unsupported ' + op);
   }
 }
@@ -70,6 +74,29 @@ export async function withLock(round, fn) {
     await new Promise(r => setTimeout(r, 150));
   }
   throw new Error('BUSY');
+}
+
+// ---------- activity log ----------
+function device(req) {
+  const ua = String(req?.headers?.['user-agent'] || '');
+  if (/iPhone/i.test(ua)) return 'iPhone';
+  if (/iPad/i.test(ua)) return 'iPad';
+  if (/Android/i.test(ua)) return 'Android';
+  if (/Macintosh/i.test(ua)) return 'Mac';
+  if (/Windows/i.test(ua)) return 'Windows';
+  if (/CrOS/i.test(ua)) return 'Chromebook';
+  return ua ? 'Other' : '';
+}
+// Never throws: logging must not break the site
+export async function log(req, who, what) {
+  try {
+    await db('LPUSH', K.log, JSON.stringify({ t: Date.now(), who: who || '', what, dev: device(req) }));
+    await db('LTRIM', K.log, 0, 1999);
+  } catch {}
+}
+export async function readLog(n = 500) {
+  const rows = await db('LRANGE', K.log, 0, n - 1);
+  return (rows || []).map(r => { try { return JSON.parse(r); } catch { return null; } }).filter(Boolean);
 }
 
 // ---------- hashing ----------
@@ -147,9 +174,10 @@ export function body(req) {
   if (typeof req.body === 'string') { try { return JSON.parse(req.body); } catch { return {}; } }
   return req.body;
 }
-export function handleErr(res, e) {
+export async function handleErr(res, e, req, who) {
   if (e.message === 'DB_NOT_CONNECTED') return send(res, 503, { error: 'db', message: 'Database not connected yet.' });
-  if (e.message === 'BUSY') return send(res, 503, { error: 'busy', message: 'Lots of people spinning right now. Try again in a few seconds.' });
+  if (e.message === 'BUSY') { await log(req, who, 'Spin had to wait too long (busy). Told them to try again.'); return send(res, 503, { error: 'busy', message: 'Lots of people spinning right now. Try again in a few seconds.' }); }
   console.error(e);
+  await log(req, who, 'ERROR: ' + String(e.message || e).slice(0, 200));
   return send(res, 500, { error: 'server', message: 'Something went wrong. Try again.' });
 }
